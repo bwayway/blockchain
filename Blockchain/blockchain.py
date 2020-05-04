@@ -3,6 +3,7 @@ import json
 from time import time
 from uuid import uuid4
 from flask import Flask,jsonify,request
+from urllib.parse import urlparse
 
 class Blockchain(object):
     def __init__(self):
@@ -13,7 +14,88 @@ class Blockchain(object):
         #Used keyword arguments to help visualize
         #Genesis block
         self.new_block(proof = 1, previous_hash = 1000)
+
+        #Create list of nodes on the blockchain. Use set() to ensure a node is added only once
+        self.nodes = set()
+
     
+    def register_node(self,address):
+        """
+        Adds a node to the self.nodes property (a list of nodes)
+        address <string> Address of the node
+        """
+        #parse the GUID
+        parsed_url = urlparse(address)
+        self.nodes.add(parsed_url.netloc)
+
+
+    def valid_chain(self,chain):
+        """
+        Loops through the chain to make sure all transactions/blocks match the current/longest version of the chain. The current chain is the authoritative so we can use that to compare each individual blocks hash to
+        chain <list> List of all the blocks on the chain
+        """
+        #Start with the first block of the chain
+        last_block = chain[0]
+        current_index = 1
+
+        #Loop through the chain and 
+
+        while current_index < len(chain):
+            block = chain[current_index]
+            print(str(last_block))
+            print(str(block))
+            #Checks the previous hash of the current block to see if it will match the hash of the last block
+            if block["previous_hash"] != self.hash(last_block):
+                return False
+            #Check to see if the proof of work is correct (Still kind of confused on how this works. Not sure why we need to check the proof of works. The proof is already used for hashing?)
+            if not self.valid_proof(last_block["proof"],block["proof"]):
+                return False
+            
+            last_block = block
+            current_index += 1
+
+        return True
+
+
+    def resolve_conflicts(self):
+        """
+        This is our Consensus Algorith. Resolves conflicts by repacing our chain with the longest, valid chain in the network
+        """
+
+        neighbors = self.nodes
+        new_chain = None
+
+
+        #Get the length of our chain
+        chain_length = len(self.chain)
+
+
+
+        for node in neighbors:
+            #runs the chain GET request on the specific node to check the chain on that node
+            response = request.get(f'http://{node}/chain')
+            if response.status_code == 200:
+                length = response.json()["length"]
+                chain = response.json()["chain"]
+
+                #Check to see if the chain returned in the response is valid and longer than ours
+                if length > chain_length and self.valid_chain(chain):
+                    chain_length = length
+                    new_chain = chain
+                    #We found a new chain longer and valid. This is our new valid chain to compare other chains to
+
+        #Replace our current chain if we discovered a new, longer, valid chain
+        if new_chain:
+            self.chain = new_chain
+            return True
+    
+        return False
+    
+    
+
+
+
+
     def new_block(self, proof, previous_hash):
         #Creates a new Block and adds it to our chain. returns a dictionary of a new block
         """
@@ -39,7 +121,7 @@ class Blockchain(object):
         #json.dumps converts the block into a json format. sort_keys sorts the block (dictionary) so that it's the same order each time/Keeps the blockchain from altering.
         block_string = json.dumps(block,sort_keys=True).encode()
 
-        return hashlib.sha256(block_string).hexdigest
+        return hashlib.sha256(block_string).hexdigest()
 
     @property
     def last_block(self):
@@ -82,7 +164,7 @@ class Blockchain(object):
     @staticmethod
     def valid_proof(last_proof,proof):
         """
-        Hash the combination of last_proof and the current proof (hash(last_proof,proof) and return True if the hash contains 4 leading zeros
+        Hash the combination of last_proof and the current proof (hash(last_proof,proof) and return True if the hash leads with 0430
         last_proof <int> - value that solved the proof of the last block
         proof <int> - value that is used to attempt to solve the current proof
         """
@@ -165,7 +247,7 @@ def new_transaction():
 
     
     index = blockchain.new_transaction(values["sender"], values["receiver"], values["amount"])
-    response = {"message": "New transaction will be added to block "+ index}
+    response = {"message": "New transaction will be added to block "+ str(index)}
 
 
     #Jsonify takes in a dictionary and returns a json file/format
@@ -185,6 +267,40 @@ def get_chain():
 
     return jsonify(response), 200
 
+#Adds new nodes to the blockchain
+@app.route("/nodes/register", methods = ["POST"])
+def register_nodes():
+    values = request.get_json()
+
+    nodes = values.get('nodes')
+    if nodes is None:
+        return "error: Please supply a valid list of nodes", 400
+    
+    for node in nodes:
+        blockchain.register_node(node)
+
+    response = {
+        "message" : "New nodes have been added",
+        "total_nodes" : list(blockchain.nodes)
+    }
+
+    return jsonify(response), 201
+
+@app.route('/nodes/resolve', methods=["GET"])
+def Consensus():
+    replaced = blockchain.resolve_conflicts()
+    if replaced:
+        response = {
+            "message" : "Our chain was updated",
+            "new_chain" : blockchain.chain
+        }
+    else:
+        response = {
+            "message" : "Our chain is authoritative",
+            "chain" : blockchain.chain
+        }
+
+    return jsonify(response), 200
 
 
 # __name__ returns the name of the current process. Essentially, if __name___ == __main__ Then we are running in the current module, not from an imported one
